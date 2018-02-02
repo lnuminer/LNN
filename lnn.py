@@ -1329,6 +1329,11 @@ class EntropyLayer:
                                                                   )
                                                         )
 
+        #feedforward -  to pre-training the output for FC
+        self.batch_data = tf.placeholder(tf.float32, shape=[self.input_data_dims, None]) #[input_data_dims, batch_size]
+        batch_out0 = tf.matmul(layer_weights_norm, self.batch_data)#[layer_neuron_num, batch_size]
+        #self.batch_out = tf.nn.relu(batch_out0-tf.tile(self.layer_threshold, [1, tf.shape(batch_out0)[1]]))
+        self.batch_out = tf.nn.relu(batch_out0-self.layer_threshold)
         return
     
     def trainLayer(self, sess):
@@ -1359,6 +1364,10 @@ class EntropyLayer:
             #print('evaluate prob:{}'.format(h))
         return (-1)*entropy
 
+    def evaluateFeedForward(self, sess, batch_data):
+        out = sess.run([self.batch_out], feed_dict = {self.batch_data:batch_data})
+        return out
+        
 
 def EntropyLayerExperiment():
     '''
@@ -1434,7 +1443,7 @@ def EntropyLayerExperiment_1():
     reception_field = 7
     input_dim_r = IMAGE_SIZE
     input_dim_c = IMAGE_SIZE
-    total_epoch = 10
+    total_epoch = 2
     samples_count = 10
     
     train_num = 6000
@@ -1455,17 +1464,17 @@ def EntropyLayerExperiment_1():
     minst_test_data = sharp_minst_data(minst_test_data).reshape(test_num, IMAGE_SIZE, IMAGE_SIZE, 1)
     minst_test_labels = extract_labels('data/t10k-labels-idx1-ubyte.gz', test_num).astype(np.uint8)
 
-    validation_images = minst_train_data[:validation_num]
-    validation_labels = minst_train_labels[:validation_num]
-    train_images = minst_train_data[validation_num:]
-    train_labels = minst_train_labels[validation_num:]
-    train = DataSet(train_images, train_labels)
-    validation = DataSet(validation_images, validation_labels)
-    test = DataSet(minst_test_data, minst_test_labels)
+#    validation_images = minst_train_data[:validation_num]
+#    validation_labels = minst_train_labels[:validation_num]
+#    train_images = minst_train_data[validation_num:]
+#    train_labels = minst_train_labels[validation_num:]
+#    train = DataSet(train_images, train_labels)
+#    validation = DataSet(validation_images, validation_labels)
+#    test = DataSet(minst_test_data, minst_test_labels)
     
     # FC without Entropy pre-train
-    fc.run_training(train, validation, test, batch_size, hidden1, hidden2, 
-                    learning_rate, log_dir, max_steps, input_dims, num_classes)
+#    fc.run_training(train, validation, test, batch_size, hidden1, hidden2, 
+#                    learning_rate, log_dir, max_steps, input_dims, num_classes)
 
     
     
@@ -1494,8 +1503,30 @@ def EntropyLayerExperiment_1():
             print('evaluating epoch: {} elapse time:{:.2f} sec entropy:{}'.format(epoch, elapsed_time, entropy))            
         
         #create new data with pre-train
+        minst_train_data =np.reshape(minst_train_data, newshape=(train_num, input_dims)).transpose()
+        minst_train_data = alayer.evaluateFeedForward(sess, minst_train_data)
+        oldshape = np.shape(minst_train_data)
+        newshape = (oldshape[2], oldshape[1], oldshape[0])
+        minst_train_data =np.transpose(minst_train_data).reshape(newshape)
         
-    
+        minst_test_data =np.reshape(minst_test_data, newshape=(test_num, input_dims)).transpose()
+        minst_test_data = alayer.evaluateFeedForward(sess, minst_test_data)
+        oldshape = np.shape(minst_test_data)
+        newshape = (oldshape[2], oldshape[1], oldshape[0])
+        minst_test_data =np.transpose(minst_test_data).reshape(newshape)
+
+        validation_images = minst_train_data[:validation_num]
+        validation_labels = minst_train_labels[:validation_num]
+        train_images = minst_train_data[validation_num:]
+        train_labels = minst_train_labels[validation_num:]
+        
+        train = DataSet(train_images, train_labels)
+        validation = DataSet(validation_images, validation_labels)
+        test = DataSet(minst_test_data, minst_test_labels)  
+
+        fc.run_training(train, validation, test, batch_size, hidden1, hidden2, 
+                        learning_rate, log_dir, max_steps, input_dims, num_classes)
+        
     return
     
 #################################################################
