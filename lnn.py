@@ -1295,11 +1295,11 @@ class EntropyLayer:
         #(layer_neuron_num, input_data_dims)*(input_data_dims, 1) = (layer_neuron_num, 1)
         y_x0  = tf.matmul(layer_weights_norm, self.input_data)
         #y_x = tf.sigmoid(tf.multiply(y_x0, tf.to_float(tf.less_equal(self.layer_threshold, y_x0))))#如果超过阈值，则激活，且激活值不应减掉阈值
-        y_x = tf.nn.relu(y_x0-self.layer_threshold)
+        y_x = tf.sigmoid(tf.nn.relu(y_x0-self.layer_threshold))
         #(layer_neuron_num, input_data_dims)*(input_data_dims, total_samples_count) = (layer_neuron_num, total_samples_count)
         y_xs0 = tf.matmul(layer_weights_norm, observed_data_2d)
         #y_xs = tf.sigmoid(tf.multiply(y_xs0, tf.to_float(tf.less_equal(tf.tile(self.layer_threshold, [1, total_samples_count]), y_xs0))))#如果超过阈值，则激活，且激活值不应减掉阈值
-        y_xs = tf.nn.relu(y_xs0-tf.tile(self.layer_threshold, [1, total_samples_count]))
+        y_xs = tf.sigmoid(tf.nn.relu(y_xs0-tf.tile(self.layer_threshold, [1, total_samples_count])))
         #计算概率
         delta_y = tf.subtract(tf.tile(y_x, [1,total_samples_count]), y_xs)#(layer_neuron_num, total_samples_count)
         dist = tf.reduce_mean(tf.square(delta_y), 0)#(1, total_samples_count)
@@ -1309,7 +1309,6 @@ class EntropyLayer:
         influence = tf.exp((-0.5)*dist)#(1, total_samples_count)
         self.prob_y = tf.reduce_mean(influence)
         #计算delt_w
-        #TODO:sigmoid
         delta_x = tf.subtract(tf.tile(self.input_data, [1,total_samples_count]), observed_data_2d)#(input_data_dims, total_samples_count)
         delta_y_inference = tf.multiply(delta_y, influence)
         delta_y_3ds = tf.reshape(delta_y_inference, shape=(1, self.layer_neuron_num, total_samples_count))
@@ -1317,6 +1316,7 @@ class EntropyLayer:
         delta_y_3d = tf.tile(delta_y_3ds,[self.input_data_dims, 1, 1])
         delta_x_3d = tf.transpose(tf.tile(delta_x_3ds,[self.layer_neuron_num, 1, 1]),
                                   perm=[1,0,2])
+        #TODO:sigmoid
         delta_w = tf.transpose(tf.reduce_sum(tf.multiply(delta_y_3d, delta_x_3d), 2)*tf.log(2*self.prob_y)*(-1.0)*(self.learn_rate)) #(layer_neuron_num, input_data_dims)
         #更新权重
         self.update_weight_ops = tf.assign(self.layer_weights, tf.add(layer_weights_norm, delta_w))
@@ -1332,8 +1332,12 @@ class EntropyLayer:
         #feedforward -  to pre-training the output for FC
         self.batch_data = tf.placeholder(tf.float32, shape=[self.input_data_dims, None]) #[input_data_dims, batch_size]
         batch_out0 = tf.matmul(layer_weights_norm, self.batch_data)#[layer_neuron_num, batch_size]
-        #self.batch_out = tf.nn.relu(batch_out0-tf.tile(self.layer_threshold, [1, tf.shape(batch_out0)[1]]))
-        self.batch_out = tf.nn.relu(batch_out0-self.layer_threshold)
+        self.batch_out = tf.sigmoid(tf.nn.relu(batch_out0-self.layer_threshold))
+        #self.batch_out = tf.sigmoid(batch_out0-self.layer_threshold)
+        
+        #统计信息
+        self.weight_energy = tf.reduce_mean(layer_weights_norm)
+        
         return
     
     def trainLayer(self, sess):
@@ -1341,7 +1345,7 @@ class EntropyLayer:
         training the layer with the train data of self.TrainingData
         '''
         for i in range(NUM_IMAGES):
-            p, nw, nt, dist_mean, dist_var = sess.run([self.prob_y, self.update_weight_ops, self.layer_update_threshold, self.dist_mean, self.dist_var], 
+            p, nw, dist_mean, dist_var = sess.run([self.prob_y, self.update_weight_ops, self.dist_mean, self.dist_var], 
                      feed_dict={self.input_data:self.TrainingData[i, :, :], self.observed_data:self.ObervedSamples})
             #print_matrix(nw, 1)
             #print('prob:{}'.format(p))
@@ -1428,13 +1432,20 @@ def EntropyLayerExperiment():
     return
 
 def EntropyLayerExperiment_1():
-    
+    '''
+    2018-2-3: 
+        取消了阈值；FC效果比较差。数据集在pre-train前后的统计如下（按每个神经元统计），可以看出方差很小，也就是说，数据更相似了。
+        另外mean反映出网络的权值已经接近0，因为sigmoid（0）=0.5. weight mean : 0.0016371733509004116*786/49 = 0.026(感受域7)
+        train data (before pretrain) : mean:0.09704016894102097 var:0.05059583857655525
+        train data (after pretrain) : mean:0.5157641172409058 var:0.0008442631806246936
+        目前只是以H最小化为目标，导致数据集中，但类间数据却没有分开。是否加入类间熵最大化约束。
+    '''
     print('EntropyLayerExperiment_1...')
     #FC Params
     batch_size = 100
     hidden1 = 128
     hidden2 = 32
-    learning_rate = 0.01
+    learning_rate = 0.001
     log_dir = 'log'
     max_steps = 2000
     input_dims = IMAGE_SIZE*IMAGE_SIZE
@@ -1443,7 +1454,7 @@ def EntropyLayerExperiment_1():
     reception_field = 7
     input_dim_r = IMAGE_SIZE
     input_dim_c = IMAGE_SIZE
-    total_epoch = 2
+    total_epoch = 1
     samples_count = 10
     
     train_num = 6000
@@ -1459,22 +1470,21 @@ def EntropyLayerExperiment_1():
     minst_train_data = extract_minst_data('data/train-images-idx3-ubyte.gz', train_num)
     minst_train_data = sharp_minst_data(minst_train_data).reshape(train_num, IMAGE_SIZE, IMAGE_SIZE, 1)
     minst_train_labels = extract_labels('data/train-labels-idx1-ubyte.gz', train_num).astype(np.uint8)
-    
     minst_test_data = extract_minst_data('data/t10k-images-idx3-ubyte.gz', test_num)
     minst_test_data = sharp_minst_data(minst_test_data).reshape(test_num, IMAGE_SIZE, IMAGE_SIZE, 1)
     minst_test_labels = extract_labels('data/t10k-labels-idx1-ubyte.gz', test_num).astype(np.uint8)
-
-#    validation_images = minst_train_data[:validation_num]
-#    validation_labels = minst_train_labels[:validation_num]
-#    train_images = minst_train_data[validation_num:]
-#    train_labels = minst_train_labels[validation_num:]
-#    train = DataSet(train_images, train_labels)
-#    validation = DataSet(validation_images, validation_labels)
-#    test = DataSet(minst_test_data, minst_test_labels)
+    print('train data (before pretrain) : mean:{} var:{}'.format(np.mean(minst_train_data), np.var(minst_train_data)))
+    validation_images = minst_train_data[:validation_num]
+    validation_labels = minst_train_labels[:validation_num]
+    train_images = minst_train_data[validation_num:]
+    train_labels = minst_train_labels[validation_num:]
+    train = DataSet(train_images, train_labels)
+    validation = DataSet(validation_images, validation_labels)
+    test = DataSet(minst_test_data, minst_test_labels)
     
-    # FC without Entropy pre-train
-#    fc.run_training(train, validation, test, batch_size, hidden1, hidden2, 
-#                    learning_rate, log_dir, max_steps, input_dims, num_classes)
+    #FC without Entropy pre-train
+    fc.run_training(train, validation, test, batch_size, hidden1, hidden2, 
+                    learning_rate, log_dir, max_steps, input_dims, num_classes)
 
     
     
@@ -1500,20 +1510,26 @@ def EntropyLayerExperiment_1():
             eval_summary[epoch] =  entropy
             elapsed_time = time.time() - start_time
             start_time = time.time()
-            print('evaluating epoch: {} elapse time:{:.2f} sec entropy:{}'.format(epoch, elapsed_time, entropy))            
+            print('evaluating epoch: {} elapse time:{:.2f} sec entropy:{}'.format(epoch, elapsed_time, entropy))  
+        
+        weight_energy = sess.run(alayer.weight_energy)
+        print('weight mean : {}'.format(weight_energy))
         
         #create new data with pre-train
         minst_train_data =np.reshape(minst_train_data, newshape=(train_num, input_dims)).transpose()
         minst_train_data = alayer.evaluateFeedForward(sess, minst_train_data)
-        oldshape = np.shape(minst_train_data)
-        newshape = (oldshape[2], oldshape[1], oldshape[0])
-        minst_train_data =np.transpose(minst_train_data).reshape(newshape)
+        oldshape = np.shape(minst_train_data)#[1, neurons_num, num_images]
+        o_dim = int(np.sqrt(oldshape[1]))
+        newshape = (oldshape[2], o_dim, o_dim, oldshape[0])
+        minst_train_data =np.reshape(minst_train_data, [oldshape[1], oldshape[2]]).transpose().reshape(newshape)
+        print('train data (after pretrain) : mean:{} var:{}'.format(np.mean(minst_train_data), np.var(minst_train_data)))        
         
         minst_test_data =np.reshape(minst_test_data, newshape=(test_num, input_dims)).transpose()
         minst_test_data = alayer.evaluateFeedForward(sess, minst_test_data)
         oldshape = np.shape(minst_test_data)
-        newshape = (oldshape[2], oldshape[1], oldshape[0])
-        minst_test_data =np.transpose(minst_test_data).reshape(newshape)
+        o_dim = int(np.sqrt(oldshape[1]))
+        newshape = (oldshape[2], o_dim, o_dim, oldshape[0])
+        minst_test_data =np.reshape(minst_test_data, [oldshape[1], oldshape[2]]).transpose().reshape(newshape)
 
         validation_images = minst_train_data[:validation_num]
         validation_labels = minst_train_labels[:validation_num]
@@ -1524,8 +1540,8 @@ def EntropyLayerExperiment_1():
         validation = DataSet(validation_images, validation_labels)
         test = DataSet(minst_test_data, minst_test_labels)  
 
-        fc.run_training(train, validation, test, batch_size, hidden1, hidden2, 
-                        learning_rate, log_dir, max_steps, input_dims, num_classes)
+    fc.run_training(train, validation, test, batch_size, hidden1, hidden2, 
+                    learning_rate, log_dir, max_steps, o_dim*o_dim, num_classes)
         
     return
     
