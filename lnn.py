@@ -1445,7 +1445,7 @@ def EntropyLayerExperiment_1():
     batch_size = 100
     hidden1 = 128
     hidden2 = 32
-    learning_rate = 0.001
+    learning_rate = 0.01
     log_dir = 'log'
     max_steps = 2000
     input_dims = IMAGE_SIZE*IMAGE_SIZE
@@ -1457,9 +1457,9 @@ def EntropyLayerExperiment_1():
     total_epoch = 1
     samples_count = 10
     
-    train_num = 6000
-    validation_num = 1000 #validation_num<train_num
-    test_num = 1000
+    train_num = 50000
+    validation_num = 5000 #validation_num<train_num
+    test_num = 10000
     
     print('(reception_field:{} \n input_dim_r:{} \n input_dim_c:{} \n learn_rate:{} \n total_epoch:{} \n samples_count:{})'.format(
             reception_field, input_dim_r, input_dim_c, learning_rate, total_epoch, samples_count))
@@ -1485,11 +1485,9 @@ def EntropyLayerExperiment_1():
     #FC without Entropy pre-train
     fc.run_training(train, validation, test, batch_size, hidden1, hidden2, 
                     learning_rate, log_dir, max_steps, input_dims, num_classes)
-
     
     
     # FC with Entropy pre-train
-    
     alayer = EntropyLayer(reception_field, input_dim_r, input_dim_c, learning_rate)
     alayer.buildMinstTrainingData(samples_count)
     alayer.buildLayer()
